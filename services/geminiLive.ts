@@ -8,6 +8,8 @@ export class BrowserSpeechService {
   
   // Track processed results to avoid duplication
   private lastProcessedIndex: number = 0;
+  // Track last final transcript to perform string deduplication if index fails
+  private lastTranscript: string = "";
 
   constructor() {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -15,13 +17,14 @@ export class BrowserSpeechService {
     if (SpeechRecognition) {
       this.recognition = new SpeechRecognition();
       this.recognition.continuous = true;
-      this.recognition.interimResults = false; // Only final results to reduce jitter/duplication
+      this.recognition.interimResults = false; 
       this.recognition.lang = 'fa-IR';
       this.recognition.maxAlternatives = 1; 
       
       this.recognition.onstart = () => {
         this.isListening = true;
         this.lastProcessedIndex = 0;
+        this.lastTranscript = "";
       };
 
       this.recognition.onend = () => {
@@ -40,15 +43,21 @@ export class BrowserSpeechService {
       this.recognition.onresult = (event: any) => {
         const resultIndex = event.resultIndex;
         
-        // Prevent processing old results (Android bug fix)
+        // Android Chrome bug fix: sometimes sends old results with new index
+        // We double check index.
         if (resultIndex < this.lastProcessedIndex) return;
 
         for (let i = resultIndex; i < event.results.length; ++i) {
           const result = event.results[i];
           if (result.isFinal) {
              const transcript = result[0].transcript.trim();
-             if (transcript && this.onTranscription) {
+             
+             // Strict Deduplication:
+             // If the new text is identical to the last processed text, ignore it.
+             // This happens frequently on Android.
+             if (transcript && transcript !== this.lastTranscript && this.onTranscription) {
                  this.onTranscription(transcript);
+                 this.lastTranscript = transcript;
              }
              this.lastProcessedIndex = i + 1;
           }
@@ -61,7 +70,7 @@ export class BrowserSpeechService {
           if (this.onError) this.onError("دسترسی به میکروفون مسدود است.");
           this.isListening = false;
         }
-        // Ignore 'no-speech' as it just means silence
+        // Ignore 'no-speech'
       };
     }
   }
@@ -81,6 +90,7 @@ export class BrowserSpeechService {
     this.onDisconnect = callbacks.onDisconnect;
     this.onError = callbacks.onError;
     this.lastProcessedIndex = 0;
+    this.lastTranscript = "";
 
     try {
       this.recognition.start();
@@ -114,7 +124,16 @@ export class IoTypeSpeechService {
     }) {
         try {
             this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            this.mediaRecorder = new MediaRecorder(this.stream);
+            
+            // Check supported mime types
+            let mimeType = 'audio/webm';
+            if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+                mimeType = 'audio/webm;codecs=opus';
+            } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+                mimeType = 'audio/mp4'; // Safari
+            }
+
+            this.mediaRecorder = new MediaRecorder(this.stream, { mimeType });
             this.chunks = [];
 
             this.mediaRecorder.ondataavailable = (e) => {
@@ -139,13 +158,15 @@ export class IoTypeSpeechService {
             }
 
             this.mediaRecorder.onstop = async () => {
-                const blob = new Blob(this.chunks, { type: 'audio/webm' });
-                this.stopStream();
-                
                 try {
-                    const text = await this.uploadToIoType(blob);
+                    const mimeType = this.mediaRecorder?.mimeType || 'audio/webm';
+                    const blob = new Blob(this.chunks, { type: mimeType });
+                    this.stopStream();
+                    
+                    const text = await this.uploadToIoType(blob, mimeType);
                     resolve(text);
                 } catch (e: any) {
+                    this.stopStream();
                     reject(e.message || "خطا در ارتباط با سرور");
                 }
             };
@@ -161,13 +182,22 @@ export class IoTypeSpeechService {
         }
     }
 
-    private async uploadToIoType(audioBlob: Blob): Promise<string> {
+    private async uploadToIoType(audioBlob: Blob, mimeType: string): Promise<string> {
         const formData = new FormData();
-        // Convert Blob to File (IoType usually expects a file)
-        const file = new File([audioBlob], "recording.webm", { type: "audio/webm" });
+        
+        // Determine extension based on mimeType
+        const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
+        const filename = `recording.${ext}`;
+
+        const file = new File([audioBlob], filename, { type: mimeType });
+        
+        // Required parameters based on documentation
+        formData.append('type', 'file'); // MANDATORY
         formData.append('file', file);
 
-        const response = await fetch('https://www.iotype.com/developer/transcription', {
+        // We use a relative path '/iotype/...' which is proxied by Vite (dev) or Nginx (prod)
+        // to avoid CORS issues.
+        const response = await fetch('/iotype/transcription', {
             method: 'POST',
             headers: {
                 'Authorization': this.apiKey,
@@ -176,6 +206,10 @@ export class IoTypeSpeechService {
             },
             body: formData
         });
+
+        if (!response.ok) {
+            throw new Error(`Server Error: ${response.status}`);
+        }
 
         const json = await response.json();
 
