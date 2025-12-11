@@ -111,9 +111,7 @@ const App: React.FC = () => {
             setIsConnected(false);
           },
           onTranscription: (newText) => {
-            // Append new text with a space
             setText((prev) => {
-                // simple logic to avoid duplicate spaces
                 const separator = prev.length > 0 && !prev.endsWith(' ') ? ' ' : '';
                 return prev + separator + newText;
             });
@@ -188,7 +186,7 @@ const App: React.FC = () => {
                 <h1 className="text-3xl md:text-5xl font-black tracking-tight text-white drop-shadow-[0_2px_15px_rgba(0,0,0,0.8)] text-center">
                   دستیار تایپ <span className="text-transparent bg-clip-text bg-gradient-to-t from-cyan-400 to-white">برفی</span>
                 </h1>
-                <p className="text-cyan-200/50 text-xs font-light">نسخه موبایل (بدون نیاز به سرور)</p>
+                <p className="text-cyan-200/50 text-xs font-light">نسخه مرورگر (بدون سرور)</p>
             </div>
 
             {/* Live Badge */}

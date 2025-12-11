@@ -5,28 +5,28 @@ export class BrowserSpeechService {
   private onTranscription: ((text: string) => void) | null = null;
   private onDisconnect: (() => void) | null = null;
   private onError: ((error: string) => void) | null = null;
-  private finalTranscript: string = '';
 
   constructor() {
-    // Check for browser support
+    // بررسی پشتیبانی مرورگر (webkit برای سافاری/کروم و استاندارد)
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     
     if (SpeechRecognition) {
       this.recognition = new SpeechRecognition();
-      this.recognition.continuous = true; // Keep listening even after user pauses
-      this.recognition.interimResults = true; // Show results while talking
-      this.recognition.lang = 'fa-IR'; // Set language to Persian
+      this.recognition.continuous = true; // ضبط مداوم
+      this.recognition.interimResults = true; // نتایج لحظه‌ای
+      this.recognition.lang = 'fa-IR'; // زبان فارسی
       
       this.recognition.onstart = () => {
         this.isListening = true;
       };
 
       this.recognition.onend = () => {
-        // If it stops but we didn't explicitly stop it (e.g. iOS silence timeout), restart it
+        // اگر کاربر خودش قطع نکرده باشد، تلاش برای اتصال مجدد (مخصوصاً برای iOS)
         if (this.isListening) {
           try {
             this.recognition.start();
           } catch (e) {
+            // گاهی اوقات بلافاصله نمی‌توان دوباره شروع کرد
             this.isListening = false;
             if (this.onDisconnect) this.onDisconnect();
           }
@@ -36,33 +36,16 @@ export class BrowserSpeechService {
       };
 
       this.recognition.onresult = (event: any) => {
-        let interimTranscript = '';
         let newFinal = '';
 
         for (let i = event.resultIndex; i < event.results.length; ++i) {
           if (event.results[i].isFinal) {
             newFinal += event.results[i][0].transcript;
-          } else {
-            interimTranscript += event.results[i][0].transcript;
           }
         }
 
-        if (newFinal || interimTranscript) {
-           // We send back the new chunk. The App component will append it.
-           // Note: Web Speech API logic differs from streaming. 
-           // Usually we want to return just the *new* valid text.
-           // However, for simplicity in the UI, we trigger the callback.
-           
-           if (this.onTranscription) {
-             // Sending interim results for real-time feel
-             // In a real app you might want to manage state better to avoid duplication,
-             // but here we simply pass the interim + final logic handled by the component or just raw text.
-             // For this implementation, let's send the latest finalize chunk if available, or interim.
-             
-             if (newFinal) {
-                 this.onTranscription(newFinal + ' ');
-             }
-           }
+        if (newFinal && this.onTranscription) {
+           this.onTranscription(newFinal);
         }
       };
 
@@ -71,10 +54,6 @@ export class BrowserSpeechService {
         if (event.error === 'not-allowed') {
           if (this.onError) this.onError("دسترسی به میکروفون مسدود است.");
           this.isListening = false;
-        } else if (event.error === 'no-speech') {
-          // Ignore no-speech errors, just wait
-        } else {
-          // if (this.onError) this.onError("خطا در شناسایی صدا: " + event.error);
         }
       };
     }
@@ -97,7 +76,6 @@ export class BrowserSpeechService {
 
     try {
       this.recognition.start();
-      this.isListening = true;
       callbacks.onConnect();
     } catch (e) {
       console.error(e);
