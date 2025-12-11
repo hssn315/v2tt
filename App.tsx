@@ -111,13 +111,24 @@ const App: React.FC = () => {
             setIsConnected(false);
           },
           onTranscription: (newText) => {
+            if (!newText) return;
+            
             setText((prev) => {
-                const separator = prev.length > 0 && !prev.endsWith(' ') ? ' ' : '';
-                return prev + separator + newText;
+                const trimmedNew = newText.trim();
+                const trimmedPrev = prev.trim();
+                
+                if (!trimmedPrev) return trimmedNew;
+                
+                // Add space only if previous doesn't end with whitespace
+                return trimmedPrev + ' ' + trimmedNew;
             });
-            if (textareaRef.current) {
-              textareaRef.current.scrollTop = textareaRef.current.scrollHeight;
-            }
+            
+            // Auto scroll
+            setTimeout(() => {
+                if (textareaRef.current) {
+                  textareaRef.current.scrollTop = textareaRef.current.scrollHeight;
+                }
+            }, 10);
           },
         });
     } catch (e: any) {
@@ -321,7 +332,7 @@ const App: React.FC = () => {
                     onClick={handleClear}
                     className="flex-1 py-3 rounded-xl bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-500 hover:to-pink-500 text-white font-bold shadow-lg shadow-rose-900/40 transition-all hover:scale-105"
                 >
-                    بله
+                    ذخیره
                 </button>
             </div>
         }
