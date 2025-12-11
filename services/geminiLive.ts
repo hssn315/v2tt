@@ -6,35 +6,29 @@ export class BrowserSpeechService {
   private onDisconnect: (() => void) | null = null;
   private onError: ((error: string) => void) | null = null;
   
-  // متغیرهای جدید برای جلوگیری از تکرار
+  // Track processed results to avoid duplication
   private lastProcessedIndex: number = 0;
-  private lastTranscript: string = "";
 
   constructor() {
-    // بررسی پشتیبانی مرورگر (webkit برای سافاری/کروم و استاندارد)
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     
     if (SpeechRecognition) {
       this.recognition = new SpeechRecognition();
-      this.recognition.continuous = true; // ضبط مداوم
-      this.recognition.interimResults = true; // نتایج لحظه‌ای (برای دقت بهتر موتور لازم است اما ما فقط نهایی را می‌گیریم)
-      this.recognition.lang = 'fa-IR'; // زبان فارسی
-      // تنظیمات برای دقت بیشتر
+      this.recognition.continuous = true;
+      this.recognition.interimResults = false; // Only final results to reduce jitter/duplication
+      this.recognition.lang = 'fa-IR';
       this.recognition.maxAlternatives = 1; 
       
       this.recognition.onstart = () => {
         this.isListening = true;
         this.lastProcessedIndex = 0;
-        this.lastTranscript = "";
       };
 
       this.recognition.onend = () => {
-        // اگر کاربر خودش قطع نکرده باشد، تلاش برای اتصال مجدد (مخصوصاً برای iOS)
         if (this.isListening) {
           try {
             this.recognition.start();
           } catch (e) {
-            // گاهی اوقات بلافاصله نمی‌توان دوباره شروع کرد
             this.isListening = false;
             if (this.onDisconnect) this.onDisconnect();
           }
@@ -44,40 +38,30 @@ export class BrowserSpeechService {
       };
 
       this.recognition.onresult = (event: any) => {
-        // حلقه روی نتایج
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          // اگر این نتیجه قبلاً پردازش شده است، رد شو (جلوگیری از باگ اندروید)
-          if (i < this.lastProcessedIndex) continue;
+        const resultIndex = event.resultIndex;
+        
+        // Prevent processing old results (Android bug fix)
+        if (resultIndex < this.lastProcessedIndex) return;
 
+        for (let i = resultIndex; i < event.results.length; ++i) {
           const result = event.results[i];
-          
           if (result.isFinal) {
-            const transcript = result[0].transcript.trim();
-            
-            // جلوگیری از تکرار: اگر متن دقیقاً همان متن قبلی است، نادیده بگیر
-            // گاهی اوقات موتور همان جمله را دوباره می‌فرستد
-            if (transcript.length > 0 && transcript !== this.lastTranscript) {
-                if (this.onTranscription) {
-                    this.onTranscription(transcript);
-                }
-                this.lastTranscript = transcript;
-            }
-            
-            // به‌روزرسانی اندیس پردازش شده
-            this.lastProcessedIndex = i + 1;
+             const transcript = result[0].transcript.trim();
+             if (transcript && this.onTranscription) {
+                 this.onTranscription(transcript);
+             }
+             this.lastProcessedIndex = i + 1;
           }
         }
       };
 
       this.recognition.onerror = (event: any) => {
-        console.error("Speech Recognition Error", event.error);
+        console.error("Browser Speech Error:", event.error);
         if (event.error === 'not-allowed') {
           if (this.onError) this.onError("دسترسی به میکروفون مسدود است.");
           this.isListening = false;
-        } else if (event.error === 'no-speech') {
-            // خطا نیست، فقط سکوت بوده
-            return; 
         }
+        // Ignore 'no-speech' as it just means silence
       };
     }
   }
@@ -89,24 +73,20 @@ export class BrowserSpeechService {
     onError: (error: string) => void;
   }) {
     if (!this.recognition) {
-      callbacks.onError("مرورگر شما از تبدیل صدا به متن پشتیبانی نمی‌کند. لطفاً از کروم یا سافاری استفاده کنید.");
+      callbacks.onError("مرورگر پشتیبانی نمی‌شود.");
       return;
     }
 
     this.onTranscription = callbacks.onTranscription;
     this.onDisconnect = callbacks.onDisconnect;
     this.onError = callbacks.onError;
-    
-    // ریست کردن وضعیت
     this.lastProcessedIndex = 0;
-    this.lastTranscript = "";
 
     try {
       this.recognition.start();
       callbacks.onConnect();
     } catch (e) {
-      console.error(e);
-      callbacks.onError("امکان شروع ضبط وجود ندارد. شاید میکروفون درگیر است.");
+      callbacks.onError("خطا در شروع ضبط.");
     }
   }
 
@@ -116,4 +96,93 @@ export class BrowserSpeechService {
       this.recognition.stop();
     }
   }
+}
+
+export class IoTypeSpeechService {
+    private mediaRecorder: MediaRecorder | null = null;
+    private chunks: Blob[] = [];
+    private stream: MediaStream | null = null;
+    private apiKey: string = "";
+
+    setApiKey(key: string) {
+        this.apiKey = key;
+    }
+
+    async start(callbacks: {
+        onConnect: () => void;
+        onError: (error: string) => void;
+    }) {
+        try {
+            this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            this.mediaRecorder = new MediaRecorder(this.stream);
+            this.chunks = [];
+
+            this.mediaRecorder.ondataavailable = (e) => {
+                if (e.data.size > 0) {
+                    this.chunks.push(e.data);
+                }
+            };
+
+            this.mediaRecorder.start();
+            callbacks.onConnect();
+        } catch (e) {
+            console.error(e);
+            callbacks.onError("دسترسی به میکروفون داده نشد.");
+        }
+    }
+
+    async stop(): Promise<string> {
+        return new Promise((resolve, reject) => {
+            if (!this.mediaRecorder || this.mediaRecorder.state === 'inactive') {
+                resolve("");
+                return;
+            }
+
+            this.mediaRecorder.onstop = async () => {
+                const blob = new Blob(this.chunks, { type: 'audio/webm' });
+                this.stopStream();
+                
+                try {
+                    const text = await this.uploadToIoType(blob);
+                    resolve(text);
+                } catch (e: any) {
+                    reject(e.message || "خطا در ارتباط با سرور");
+                }
+            };
+
+            this.mediaRecorder.stop();
+        });
+    }
+
+    private stopStream() {
+        if (this.stream) {
+            this.stream.getTracks().forEach(track => track.stop());
+            this.stream = null;
+        }
+    }
+
+    private async uploadToIoType(audioBlob: Blob): Promise<string> {
+        const formData = new FormData();
+        // Convert Blob to File (IoType usually expects a file)
+        const file = new File([audioBlob], "recording.webm", { type: "audio/webm" });
+        formData.append('file', file);
+
+        const response = await fetch('https://www.iotype.com/developer/transcription', {
+            method: 'POST',
+            headers: {
+                'Authorization': this.apiKey,
+                'Accept': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: formData
+        });
+
+        const json = await response.json();
+
+        if (json.status === 100 && json.result) {
+            return json.result;
+        } else {
+            throw new Error(json.message || "خطای ناشناخته از سرور");
+        }
+    }
 }

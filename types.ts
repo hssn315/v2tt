@@ -1,3 +1,4 @@
+
 export interface Note {
   id: string;
   title: string;
@@ -13,4 +14,10 @@ export interface LiveConnectionState {
 
 export interface AudioVisualizerProps {
   isRecording: boolean;
+}
+
+export type RecognitionMode = 'browser' | 'server';
+
+export interface AppSettings {
+  ioTypeApiKey: string;
 }
