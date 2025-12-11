@@ -1,5 +1,6 @@
+
 import React, { useState, useEffect, useRef } from 'react';
-import { GeminiLiveService } from './services/geminiLive';
+import { BrowserSpeechService } from './services/geminiLive';
 import AudioVisualizer from './components/AudioVisualizer';
 import Modal from './components/Modal';
 import { Note } from './types';
@@ -38,7 +39,7 @@ const TrashIcon = () => (
 
 const SaveIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0111.186 0z" />
+    <path strokeLinecap="round" strokeLinejoin="round" d="M17.59 3.32c1.1.13 1.91 1.08 1.91 2.18V21L12 17.25 4.5 21V5.51c0-1.11.81-2.06 1.91-2.19a48.51 48.51 0 0111.18 0z" />
   </svg>
 );
 
@@ -85,7 +86,7 @@ const App: React.FC = () => {
   // Saved notes
   const [savedNotes, setSavedNotes] = useState<Note[]>([]);
 
-  const geminiServiceRef = useRef<GeminiLiveService | null>(null);
+  const speechServiceRef = useRef<BrowserSpeechService | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -98,9 +99,11 @@ const App: React.FC = () => {
   const handleStart = async () => {
     setError(null);
     try {
-        geminiServiceRef.current = new GeminiLiveService();
+        if (!speechServiceRef.current) {
+          speechServiceRef.current = new BrowserSpeechService();
+        }
         
-        await geminiServiceRef.current.connect({
+        speechServiceRef.current.connect({
           onConnect: () => setIsConnected(true),
           onDisconnect: () => setIsConnected(false),
           onError: (err) => {
@@ -108,7 +111,12 @@ const App: React.FC = () => {
             setIsConnected(false);
           },
           onTranscription: (newText) => {
-            setText((prev) => prev + newText);
+            // Append new text with a space
+            setText((prev) => {
+                // simple logic to avoid duplicate spaces
+                const separator = prev.length > 0 && !prev.endsWith(' ') ? ' ' : '';
+                return prev + separator + newText;
+            });
             if (textareaRef.current) {
               textareaRef.current.scrollTop = textareaRef.current.scrollHeight;
             }
@@ -121,10 +129,9 @@ const App: React.FC = () => {
   };
 
   const handleStop = async () => {
-    if (geminiServiceRef.current) {
-      await geminiServiceRef.current.disconnect();
+    if (speechServiceRef.current) {
+      await speechServiceRef.current.disconnect();
       setIsConnected(false);
-      geminiServiceRef.current = null;
     }
   };
 
@@ -181,20 +188,21 @@ const App: React.FC = () => {
                 <h1 className="text-3xl md:text-5xl font-black tracking-tight text-white drop-shadow-[0_2px_15px_rgba(0,0,0,0.8)] text-center">
                   دستیار تایپ <span className="text-transparent bg-clip-text bg-gradient-to-t from-cyan-400 to-white">برفی</span>
                 </h1>
+                <p className="text-cyan-200/50 text-xs font-light">نسخه موبایل (بدون نیاز به سرور)</p>
             </div>
 
-            {/* Live Badge - Absolute Top Left on Desktop / Relative on Mobile */}
+            {/* Live Badge */}
             <div className="absolute left-0 top-0 hidden md:flex items-center gap-3 px-4 py-2 rounded-full border backdrop-blur-md transition-all duration-500 border-white/10 bg-white/5">
                  <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-cyan-400 animate-ping' : 'bg-gray-500'}`} />
                  <span className={`text-sm font-bold ${isConnected ? 'text-cyan-300' : 'text-gray-400'}`}>
-                    {isConnected ? 'اتصال لایو' : 'آماده به کار'}
+                    {isConnected ? 'در حال شنیدن...' : 'آماده به کار'}
                  </span>
             </div>
              {/* Mobile Badge */}
              <div className="flex md:hidden mt-2 items-center gap-2 px-3 py-1 rounded-full border border-white/10 bg-white/5 backdrop-blur-md">
                  <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-cyan-400 animate-ping' : 'bg-gray-500'}`} />
                  <span className={`text-xs font-bold ${isConnected ? 'text-cyan-300' : 'text-gray-400'}`}>
-                    {isConnected ? 'لایو' : 'آماده'}
+                    {isConnected ? 'فعال' : 'آماده'}
                  </span>
             </div>
         </header>
@@ -247,7 +255,7 @@ const App: React.FC = () => {
                 ref={textareaRef}
                 value={text}
                 onChange={(e) => setText(e.target.value)}
-                placeholder="برای شروع صحبت کنید..."
+                placeholder="روی میکروفون بزنید و صحبت کنید..."
                 className="relative w-full h-full bg-transparent p-6 md:p-10 pb-24 text-xl md:text-3xl leading-relaxed resize-none focus:outline-none text-right placeholder-white/20 text-gray-100 font-bold tracking-wide scrollbar-thin scrollbar-thumb-cyan-700 scrollbar-track-transparent"
                 dir="rtl"
             />

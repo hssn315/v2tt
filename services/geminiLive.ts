@@ -1,231 +1,114 @@
-import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
 
-interface LiveServiceCallbacks {
-  onTranscription: (text: string) => void;
-  onConnect: () => void;
-  onDisconnect: () => void;
-  onError: (error: string) => void;
-}
-
-export class GeminiLiveService {
-  private ai: GoogleGenAI | null = null;
-  private sessionPromise: Promise<any> | null = null;
-  private inputAudioContext: AudioContext | null = null;
-  private mediaStream: MediaStream | null = null;
-  private processor: ScriptProcessorNode | null = null;
-  private source: MediaStreamAudioSourceNode | null = null;
-  private TARGET_SAMPLE_RATE = 16000;
+export class BrowserSpeechService {
+  private recognition: any = null;
+  private isListening: boolean = false;
+  private onTranscription: ((text: string) => void) | null = null;
+  private onDisconnect: (() => void) | null = null;
+  private onError: ((error: string) => void) | null = null;
+  private finalTranscript: string = '';
 
   constructor() {
-    // Initialization deferred to connect()
-  }
-
-  async connect(callbacks: LiveServiceCallbacks) {
-    try {
-      const apiKey = process.env.API_KEY || 'AIzaSyCXyEqGFycn9KUqVDNLgecIvRtw_r-0sMw';
+    // Check for browser support
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    
+    if (SpeechRecognition) {
+      this.recognition = new SpeechRecognition();
+      this.recognition.continuous = true; // Keep listening even after user pauses
+      this.recognition.interimResults = true; // Show results while talking
+      this.recognition.lang = 'fa-IR'; // Set language to Persian
       
-      if (!apiKey) {
-        throw new Error("API Key is missing.");
-      }
-
-      this.ai = new GoogleGenAI({ apiKey });
-
-      // 2. Mobile Browser Compatibility Check
-      // We do not force sampleRate here anymore, allowing the browser to pick the native one (e.g. 44100 or 48000)
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      this.inputAudioContext = new AudioContextClass();
-
-      // Resume context if suspended (iOS/Android Policy)
-      if (this.inputAudioContext.state === 'suspended') {
-        await this.inputAudioContext.resume();
-      }
-      
-      // 3. Get Microphone Stream
-      // Removing explicit sampleRate from getUserMedia helps with iOS compatibility
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({ 
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        } 
-      });
-
-      // 4. Connect to Gemini Live
-      const config = {
-        model: 'gemini-2.5-flash-native-audio-preview-09-2025',
-        callbacks: {
-          onopen: () => {
-            callbacks.onConnect();
-            this.startAudioStream(callbacks);
-          },
-          onmessage: (message: LiveServerMessage) => {
-            const outputText = message?.serverContent?.outputTranscription?.text;
-            if (outputText) {
-               callbacks.onTranscription(outputText);
-            }
-          },
-          onerror: (e: ErrorEvent) => {
-            console.error("Gemini Live Error:", e);
-            callbacks.onError("خطا در ارتباط با هوش مصنوعی. لطفاً اینترنت خود را چک کنید.");
-          },
-          onclose: (e: CloseEvent) => {
-            callbacks.onDisconnect();
-          },
-        },
-        config: {
-          responseModalities: [Modality.AUDIO], 
-          outputAudioTranscription: {},
-          systemInstruction: "شما یک دستیار هوشمند تبدیل گفتار به نوشتار هستید. وظیفه شما فقط شنیدن دقیق صدا و تبدیل آن به متن فارسی سلیس و صحیح است. هرچه می‌شنوید را بنویسید و اشتباهات گرامری یا املایی گوینده را در متن خروجی اصلاح کنید. به هیچ عنوان به سوالات پاسخ ندهید، نظر ندهید و مکالمه نکنید. فقط نقش ماشین‌تایپ را ایفا کنید.",
-        },
+      this.recognition.onstart = () => {
+        this.isListening = true;
       };
 
-      if (this.ai && this.ai.live) {
-          this.sessionPromise = this.ai.live.connect(config);
-      } else {
-          throw new Error("خطا در راه‌اندازی سرویس هوش مصنوعی.");
-      }
+      this.recognition.onend = () => {
+        // If it stops but we didn't explicitly stop it (e.g. iOS silence timeout), restart it
+        if (this.isListening) {
+          try {
+            this.recognition.start();
+          } catch (e) {
+            this.isListening = false;
+            if (this.onDisconnect) this.onDisconnect();
+          }
+        } else {
+          if (this.onDisconnect) this.onDisconnect();
+        }
+      };
 
-    } catch (error: any) {
-      console.error("Connection Error:", error);
-      let errorMessage = "خطا در برقراری ارتباط";
-      
-      if (error.message && error.message.includes("API Key")) {
-          errorMessage = "کلید API تنظیم نشده است.";
-      } else if (error.message && error.message.includes("not found") || error.name === 'NotAllowedError') {
-          errorMessage = "دسترسی به میکروفون داده نشد.";
-      } else if (error.message) {
-          errorMessage = error.message;
-      }
-      
-      callbacks.onError(errorMessage);
+      this.recognition.onresult = (event: any) => {
+        let interimTranscript = '';
+        let newFinal = '';
+
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            newFinal += event.results[i][0].transcript;
+          } else {
+            interimTranscript += event.results[i][0].transcript;
+          }
+        }
+
+        if (newFinal || interimTranscript) {
+           // We send back the new chunk. The App component will append it.
+           // Note: Web Speech API logic differs from streaming. 
+           // Usually we want to return just the *new* valid text.
+           // However, for simplicity in the UI, we trigger the callback.
+           
+           if (this.onTranscription) {
+             // Sending interim results for real-time feel
+             // In a real app you might want to manage state better to avoid duplication,
+             // but here we simply pass the interim + final logic handled by the component or just raw text.
+             // For this implementation, let's send the latest finalize chunk if available, or interim.
+             
+             if (newFinal) {
+                 this.onTranscription(newFinal + ' ');
+             }
+           }
+        }
+      };
+
+      this.recognition.onerror = (event: any) => {
+        console.error("Speech Recognition Error", event.error);
+        if (event.error === 'not-allowed') {
+          if (this.onError) this.onError("دسترسی به میکروفون مسدود است.");
+          this.isListening = false;
+        } else if (event.error === 'no-speech') {
+          // Ignore no-speech errors, just wait
+        } else {
+          // if (this.onError) this.onError("خطا در شناسایی صدا: " + event.error);
+        }
+      };
     }
   }
 
-  private startAudioStream(callbacks: LiveServiceCallbacks) {
-    if (!this.inputAudioContext || !this.mediaStream || !this.sessionPromise) return;
+  connect(callbacks: {
+    onTranscription: (text: string) => void;
+    onConnect: () => void;
+    onDisconnect: () => void;
+    onError: (error: string) => void;
+  }) {
+    if (!this.recognition) {
+      callbacks.onError("مرورگر شما از تبدیل صدا به متن پشتیبانی نمی‌کند. لطفاً از کروم یا سافاری استفاده کنید.");
+      return;
+    }
+
+    this.onTranscription = callbacks.onTranscription;
+    this.onDisconnect = callbacks.onDisconnect;
+    this.onError = callbacks.onError;
 
     try {
-        this.source = this.inputAudioContext.createMediaStreamSource(this.mediaStream);
-        
-        // Use a larger buffer size (4096) for better mobile performance to prevent audio glitches
-        this.processor = this.inputAudioContext.createScriptProcessor(4096, 1, 1);
-
-        this.processor.onaudioprocess = (e) => {
-          if (!this.sessionPromise) return;
-
-          const inputData = e.inputBuffer.getChannelData(0);
-          
-          // Downsample logic: Convert from Device Rate (e.g. 48000) to Model Rate (16000)
-          // This is crucial for mobile devices that don't support native 16k recording
-          const currentSampleRate = this.inputAudioContext!.sampleRate;
-          const downsampledData = this.downsampleBuffer(inputData, currentSampleRate, this.TARGET_SAMPLE_RATE);
-          
-          const pcmBlob = this.createBlob(downsampledData);
-          
-          this.sessionPromise.then((session) => {
-            if (session && typeof session.sendRealtimeInput === 'function') {
-                session.sendRealtimeInput({ media: pcmBlob });
-            }
-          }).catch(err => {
-              // Suppress minor stream errors
-          });
-        };
-
-        this.source.connect(this.processor);
-        this.processor.connect(this.inputAudioContext.destination);
+      this.recognition.start();
+      this.isListening = true;
+      callbacks.onConnect();
     } catch (e) {
-        console.error("Audio Stream Error:", e);
-        callbacks.onError("خطا در پردازش صدا");
+      console.error(e);
+      callbacks.onError("امکان شروع ضبط وجود ندارد.");
     }
-  }
-
-  /**
-   * Converts audio from the browser's native sample rate to 16000Hz required by Gemini
-   */
-  private downsampleBuffer(buffer: Float32Array, inputRate: number, outputRate: number): Float32Array {
-    if (outputRate === inputRate) {
-      return buffer;
-    }
-    const sampleRateRatio = inputRate / outputRate;
-    const newLength = Math.round(buffer.length / sampleRateRatio);
-    const result = new Float32Array(newLength);
-    let offsetResult = 0;
-    let offsetBuffer = 0;
-    
-    while (offsetResult < result.length) {
-      const nextOffsetBuffer = Math.round((offsetResult + 1) * sampleRateRatio);
-      
-      // Averaging allows for smoother downsampling than just dropping samples
-      let accum = 0;
-      let count = 0;
-      for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
-        accum += buffer[i];
-        count++;
-      }
-      result[offsetResult] = count > 0 ? accum / count : 0;
-      
-      offsetResult++;
-      offsetBuffer = nextOffsetBuffer;
-    }
-    return result;
-  }
-
-  private createBlob(data: Float32Array) {
-    const l = data.length;
-    const int16 = new Int16Array(l);
-    for (let i = 0; i < l; i++) {
-      // Scale Float32 (-1.0 to 1.0) to Int16 (-32768 to 32767)
-      const s = Math.max(-1, Math.min(1, data[i]));
-      int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-    }
-    const uint8 = new Uint8Array(int16.buffer);
-    
-    let binary = '';
-    const len = uint8.byteLength;
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(uint8[i]);
-    }
-    const base64 = btoa(binary);
-
-    return {
-      data: base64,
-      mimeType: 'audio/pcm;rate=16000',
-    };
   }
 
   async disconnect() {
-    try {
-        if (this.processor) {
-          this.processor.disconnect();
-          this.processor = null;
-        }
-        if (this.source) {
-          this.source.disconnect();
-          this.source = null;
-        }
-        if (this.mediaStream) {
-          this.mediaStream.getTracks().forEach(track => track.stop());
-          this.mediaStream = null;
-        }
-        if (this.inputAudioContext) {
-          if (this.inputAudioContext.state !== 'closed') {
-              await this.inputAudioContext.close();
-          }
-          this.inputAudioContext = null;
-        }
-        
-        if (this.sessionPromise) {
-            const session = await this.sessionPromise;
-            if (session && typeof session.close === 'function') {
-                session.close();
-            }
-        }
-    } catch (e) {
-        console.warn("Disconnect Error:", e);
-    } finally {
-        this.sessionPromise = null; 
-        this.ai = null;
+    this.isListening = false;
+    if (this.recognition) {
+      this.recognition.stop();
     }
   }
 }

@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef } from 'react';
 
 interface Props {
@@ -17,17 +18,15 @@ const AudioVisualizer: React.FC<Props> = ({ isActive }) => {
     let time = 0;
 
     const animate = () => {
-      time += 0.05;
+      time += 0.1; // Speed of animation
       const width = canvas.width;
       const height = canvas.height;
 
       ctx.clearRect(0, 0, width, height);
-
-      // Base line
       const centerY = height / 2;
 
       if (!isActive) {
-        // Resting State: A subtle breathing line
+        // Resting State
         ctx.beginPath();
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
         ctx.lineWidth = 1;
@@ -35,53 +34,46 @@ const AudioVisualizer: React.FC<Props> = ({ isActive }) => {
         ctx.lineTo(width, centerY);
         ctx.stroke();
         
-        // Small pulse
-        ctx.beginPath();
-        const pulse = Math.sin(time * 2) * 2;
-        ctx.arc(width / 2, centerY, 2 + pulse, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(6, 182, 212, 0.5)';
-        ctx.fill();
-        
         animationRef.current = requestAnimationFrame(animate);
         return;
       }
 
-      // Active State: Luxury Waves
+      // Active State: Simulated Voice Waves
+      // We simulate 3 layers of waves since we don't have direct audio data access 
+      // when using the native Web Speech API (privacy restriction).
       
-      // Wave 1: Cyan (Snow)
-      ctx.beginPath();
-      const gradient1 = ctx.createLinearGradient(0, 0, width, 0);
-      gradient1.addColorStop(0, 'rgba(6, 182, 212, 0)');
-      gradient1.addColorStop(0.5, 'rgba(6, 182, 212, 1)');
-      gradient1.addColorStop(1, 'rgba(6, 182, 212, 0)');
-      ctx.strokeStyle = gradient1;
-      ctx.lineWidth = 3;
+      const colors = [
+        'rgba(6, 182, 212, 0.8)', // Cyan
+        'rgba(232, 121, 249, 0.8)', // Pink
+        'rgba(255, 255, 255, 0.5)'  // White
+      ];
 
-      for (let i = 0; i < width; i++) {
-        const y = centerY + Math.sin(i * 0.02 + time) * 30 * Math.sin(i * 0.01) * Math.sin(time * 0.5);
-        if (i === 0) ctx.moveTo(i, y);
-        else ctx.lineTo(i, y);
-      }
-      ctx.stroke();
+      colors.forEach((color, index) => {
+          ctx.beginPath();
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2;
 
-      // Wave 2: Pink (Luxury)
-      ctx.beginPath();
-      const gradient2 = ctx.createLinearGradient(0, 0, width, 0);
-      gradient2.addColorStop(0, 'rgba(232, 121, 249, 0)');
-      gradient2.addColorStop(0.5, 'rgba(232, 121, 249, 0.8)');
-      gradient2.addColorStop(1, 'rgba(232, 121, 249, 0)');
-      ctx.strokeStyle = gradient2;
-      ctx.lineWidth = 3;
+          for (let i = 0; i < width; i++) {
+            // Create a randomized wave pattern that looks like voice
+            const frequency = 0.01 + (index * 0.005);
+            const amplitude = 15 + (Math.sin(time * (index + 1)) * 10);
+            const movement = time * (2 + index);
+            
+            // Compose wave
+            const y = centerY + 
+                      Math.sin(i * frequency + movement) * 
+                      amplitude * 
+                      Math.sin(i * 0.01) * // Envelope to taper ends
+                      (Math.random() * 0.2 + 0.8); // Jitter
 
-      for (let i = 0; i < width; i++) {
-        const y = centerY + Math.sin(i * 0.03 - time * 1.5) * 20 * Math.sin(i * 0.005);
-        if (i === 0) ctx.moveTo(i, y);
-        else ctx.lineTo(i, y);
-      }
-      ctx.stroke();
+            if (i === 0) ctx.moveTo(i, y);
+            else ctx.lineTo(i, y);
+          }
+          ctx.stroke();
+      });
 
       // Glow effect
-      ctx.shadowBlur = 15;
+      ctx.shadowBlur = 10;
       ctx.shadowColor = "rgba(6, 182, 212, 0.5)";
 
       animationRef.current = requestAnimationFrame(animate);
